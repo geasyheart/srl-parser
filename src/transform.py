@@ -139,7 +139,7 @@ class CoNLL2012SRLFile(object):
             with open(label_file_path, 'r') as f:
                 return json.load(f)
 
-        labels = {'[PAD]': 0, 'O': 1}
+        labels = {'O': 0}
         for sample in self.load_file():
             srl_matrix: List[List[str]] = sample['srl']
             for srl_vector in srl_matrix:

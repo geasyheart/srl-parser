@@ -171,13 +171,13 @@ class SpanBIOParser(object):
             # for trues assert
             trues = batch['srl_matrix'].flatten(end_dim=1)[mask.flatten(end_dim=1)[:, 0]]
             assert trues.size(0) == sum([len(u) for u in batch['batch_tokens']])
-            assert trues.bool().any(-1).all()
+            # assert trues.bool().any(-1).all() # O as 0
             #
             pred = self.model.decode(pred, mask)
             #
             result1 = self.decode_output(pred, batch)
-            result2 = self.decode_output2(pred, batch)
-            assert result1 == result2
+            # result2 = self.decode_output2(pred, batch)
+            # assert result1 == result2
             metric.step(y_preds=result1, y_trues=batch['srl_sets'])
 
             self._step(optimizer=optimizer, scheduler=scheduler)
@@ -233,7 +233,7 @@ class SpanBIOParser(object):
             # for trues assert
             trues = batch['srl_matrix'].flatten(end_dim=1)[mask.flatten(end_dim=1)[:, 0]]
             assert trues.size(0) == sum([len(u) for u in batch['batch_tokens']])
-            assert trues.bool().any(-1).all()
+            # assert trues.bool().any(-1).all()
             #
             pred = self.model.decode(pred, mask)
             #
