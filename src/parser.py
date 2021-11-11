@@ -1,19 +1,18 @@
 # -*- coding: utf8 -*-
 #
 import math
-from typing import Optional, Union, List, Tuple
+from typing import Optional, Union
 
 import torch
 from torch import nn
-from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
 from transformers import get_linear_schedule_with_warmup, AdamW, set_seed, AutoTokenizer
 
 from src.config import TRAIN_PATH, MODEL_PATH
 from src.metric import Metric
-from src.utils import logger, get_entities
 from src.model import SpanBIOSemanticRoleLabelingModel
 from src.transform import CoNLL2012SRLFile, CoNLL2012SRLDataSet
+from src.utils import logger, get_entities
 
 
 class SpanBIOParser(object):
@@ -157,30 +156,32 @@ class SpanBIOParser(object):
         total_loss = 0.
         metric = Metric()
         for batch in tqdm(train, desc='fit_dataloader'):
-            subwords = batch['subwords']
-            srls = batch['srl_matrix']
-            word_mask = subwords[:, 1:].ne(self.tokenizer.pad_token_id)
-            mask = word_mask if len(subwords.shape) < 3 else word_mask.any(-1)
-
-            mask = mask.unsqueeze(1) & mask.unsqueeze(2)
-            pred = self.model(subwords)
-            loss = self.model.loss(pred, srls, mask)
+            pred = self.model(
+                input_ids=batch['input_ids'],
+                token_type_ids=batch['token_type_ids'],
+                attention_mask=batch['attention_mask'],
+                word_index=batch['word_index']
+            )
+            word_mask = batch['word_attention_mask']
+            mask = word_mask.unsqueeze(1) & word_mask.unsqueeze(2)
+            loss = self.model.loss(pred, batch['srl_matrix'], mask)
             total_loss += loss.item()
             loss.backward()
 
             # for trues assert
-            trues = srls.flatten(end_dim=1)[mask.flatten(end_dim=1)[:, 0]]
+            trues = batch['srl_matrix'].flatten(end_dim=1)[mask.flatten(end_dim=1)[:, 0]]
             assert trues.size(0) == sum([len(u) for u in batch['batch_tokens']])
             assert trues.bool().any(-1).all()
             #
-            # pred = self.model.decode(pred, mask)
+            pred = self.model.decode(pred, mask)
             #
-            # result1 = self.decode_output(pred, batch)
-            # result2 = self.decode_output2(pred, batch)
-            # assert result1 == result2
-            # metric.step(y_preds=result1, y_trues=batch['srl_sets'])
+            result1 = self.decode_output(pred, batch)
+            result2 = self.decode_output2(pred, batch)
+            assert result1 == result2
+            metric.step(y_preds=result1, y_trues=batch['srl_sets'])
 
             self._step(optimizer=optimizer, scheduler=scheduler)
+        logger.info(f'train metric: {metric}')
         total_loss /= len(train)
         return total_loss
 
@@ -218,23 +219,24 @@ class SpanBIOParser(object):
         total_loss, metric = 0, Metric()
 
         for batch in tqdm(dev, desc='evaluate_dataloader'):
-            subwords = batch['subwords']
-            srls = batch['srl_matrix']
-            word_mask = subwords[:, 1:].ne(self.tokenizer.pad_token_id)
-            mask = word_mask if len(subwords.shape) < 3 else word_mask.any(-1)
-
-            mask = mask.unsqueeze(1) & mask.unsqueeze(2)
-            pred = self.model(subwords)
-            loss = self.model.loss(pred, srls, mask)
+            pred = self.model(
+                input_ids=batch['input_ids'],
+                token_type_ids=batch['token_type_ids'],
+                attention_mask=batch['attention_mask'],
+                word_index=batch['word_index']
+            )
+            word_mask = batch['word_attention_mask']
+            mask = word_mask.unsqueeze(1) & word_mask.unsqueeze(2)
+            loss = self.model.loss(pred, batch['srl_matrix'], mask)
             total_loss += loss.item()
 
             # for trues assert
-            trues = srls.flatten(end_dim=1)[mask.flatten(end_dim=1)[:, 0]]
+            trues = batch['srl_matrix'].flatten(end_dim=1)[mask.flatten(end_dim=1)[:, 0]]
             assert trues.size(0) == sum([len(u) for u in batch['batch_tokens']])
             assert trues.bool().any(-1).all()
-
+            #
             pred = self.model.decode(pred, mask)
-
+            #
             result1 = self.decode_output(pred, batch)
             result2 = self.decode_output2(pred, batch)
             assert result1 == result2

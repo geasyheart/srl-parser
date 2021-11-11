@@ -1,15 +1,55 @@
 # -*- coding: utf8 -*-
 #
 import json
-from typing import List, Set, Dict
+from typing import List
+from typing import Set, Dict
 
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import dataset, dataloader
 from tqdm import tqdm
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from src.config import DATA_PATH, TRAIN_PATH
+
+
+def tokenize(form: List[List[str]], tokenizer: PreTrainedTokenizerBase, max_length: int, char_base: bool = False):
+    """
+
+    Args:
+        form:
+        tokenizer:
+        max_length:
+        char_base: 这里指的是form[即 word]是否是字级别的
+
+    Returns:
+
+    """
+    res = tokenizer.batch_encode_plus(
+        form,
+        is_split_into_words=True,
+        max_length=max_length,
+        truncation=True,
+    )
+    result = res.data
+    # 可用于长度大于指定长度过滤, overflow指字长度大于指定max_length，如果有cls,sep，那么就算上这个
+    result['overflow'] = [len(encoding.overflowing) > 0 for encoding in res.encodings]
+    if not char_base:
+        word_index = []
+        for encoding in res.encodings:
+            word_index.append([])
+
+            last_word_idx = -1
+            current_length = 0
+            for word_idx in encoding.word_ids[1:-1]:
+                if word_idx != last_word_idx:
+                    word_index[-1].append(current_length)
+
+                current_length += 1
+                last_word_idx = word_idx
+        result['word_index'] = word_index
+        result['word_attention_mask'] = [[True] * len(index) for index in word_index]
+    return result
 
 
 def group_pa_by_p_(srl):
@@ -112,32 +152,6 @@ class CoNLL2012SRLFile(object):
         return labels
 
 
-def encoder_texts(texts: List[List[str]], tokenizer, add_cls_token: bool = True, add_sep_token: bool = False):
-    # 统计句子中最大的词长度
-    fix_len = max([max([len(word) for word in text]) for text in texts])
-
-    matrix = []
-    for _text in texts:
-        vector = []
-        text = [*_text]
-        if add_cls_token:
-            text.insert(0, tokenizer.cls_token)
-        if add_sep_token:
-            text.append(tokenizer.sep_token)
-
-        input_ids = tokenizer.batch_encode_plus(
-            text,
-            add_special_tokens=False,
-        )['input_ids']
-
-        for _input_ids in input_ids:
-            # 修复例如: texts = [['\ue5f1\ue5f1\ue5f1\ue5f1']] 这种情况
-            _input_ids = _input_ids or [tokenizer.unk_token_id]
-            vector.append(_input_ids + (fix_len - len(_input_ids)) * [tokenizer.pad_token_id])
-        matrix.append(torch.tensor(vector, dtype=torch.long))
-    return pad_sequence(matrix, batch_first=True)
-
-
 class CoNLL2012SRLDataSet(dataset.Dataset):
     def __init__(self, path, pretrained_name_or_path: str, device: torch.device = 'cpu'):
         super(CoNLL2012SRLDataSet, self).__init__()
@@ -177,14 +191,34 @@ class CoNLL2012SRLDataSet(dataset.Dataset):
         for index, srl in enumerate(batch_srls):
             w = srl.size(0)
             srl_matrix[index][:w, :w] = srl
+        token_result = tokenize(batch_tokens, tokenizer=self.tokenizer, max_length=512)
+        assert all(token_result['overflow']) is False  # 如果这里报错就改self.lines那里
+        input_ids = pad_sequence([torch.tensor(input_ids) for input_ids in token_result['input_ids']], batch_first=True)
+        token_type_ids = pad_sequence(
+            [torch.tensor(token_type_ids) for token_type_ids in token_result['token_type_ids']],
+            batch_first=True)
+        attention_mask = pad_sequence(
+            [torch.tensor(attention_mask) for attention_mask in token_result['attention_mask']],
+            batch_first=True)
+        word_index = pad_sequence([torch.tensor(word_index) for word_index in token_result['word_index']],
+                                  batch_first=True)
 
-        return {
-            'batch_srls': batch_srls,
+        word_attention_mask = pad_sequence(
+            [torch.tensor(word_attention_mask) for word_attention_mask in token_result['word_attention_mask']],
+            batch_first=True)
+
+        result = {
+            # 'batch_srls': batch_srls,
             'batch_tokens': batch_tokens,
             'srl_sets': [_['srl_set'] for _ in batch],
-            'subwords': encoder_texts(batch_tokens, tokenizer=self.tokenizer).to(self.device),
-            'srl_matrix': srl_matrix.to(self.device)
+            'srl_matrix': srl_matrix.to(self.device),
+            'input_ids': input_ids.to(self.device),
+            'token_type_ids': token_type_ids.to(self.device),
+            'attention_mask': attention_mask.to(self.device),
+            'word_index': word_index.to(self.device),
+            'word_attention_mask': word_attention_mask.to(self.device)
         }
+        return result
 
     def to_dataloader(self, batch_size: int = 32, shuffle: bool = False):
         return dataloader.DataLoader(
