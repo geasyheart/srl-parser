@@ -1,18 +1,19 @@
 # -*- coding: utf8 -*-
 #
 import math
-from typing import Optional, Union
+from typing import Optional, Union, List, Dict, Any
 
 import torch
 from torch import nn
 from tqdm import tqdm
-from transformers import get_linear_schedule_with_warmup, AdamW, set_seed, AutoTokenizer
+from transformers import get_linear_schedule_with_warmup, set_seed, AutoTokenizer
 
-from src.config import TRAIN_PATH, MODEL_PATH
+from src.canvas import render_graph
+from src.config import TRAIN_PATH, MODEL_PATH, DATA_PATH
 from src.metric import Metric
 from src.model import SpanBIOSemanticRoleLabelingModel
 from src.transform import CoNLL2012SRLFile, CoNLL2012SRLDataSet
-from src.utils import logger, get_entities
+from src.utils import logger, get_entities, build_optimizer_for_pretrained
 
 
 class SpanBIOParser(object):
@@ -45,31 +46,13 @@ class SpanBIOParser(object):
             self,
             warmup_steps: Union[float, int],
             num_training_steps: int,
-            lr=1e-5, weight_decay=0.01,
+            lr=1e-3, weight_decay=0.01,
+            transformer_lr=1e-4,
     ):
-        """
-        https://github.com/huggingface/transformers/blob/7b75aa9fa55bee577e2c7403301ed31103125a35/src/transformers/trainer.py#L232
-        :param warmup_steps:
-        :param num_training_steps:
-        :param lr:
-        :param weight_decay:
-        :return:
-        """
-        if warmup_steps <= 1:
-            warmup_steps = int(num_training_steps * warmup_steps)
-        # Prepare optimizer and schedule (linear warmup and decay)
-        no_decay = ["bias", "LayerNorm.weight"]
-        optimizer_grouped_parameters = [
-            {
-                "params": [p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)],
-                "weight_decay": weight_decay,
-            },
-            {
-                "params": [p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)],
-                "weight_decay": 0.0,
-            },
-        ]
-        optimizer = AdamW(optimizer_grouped_parameters, lr=lr)
+        optimizer = build_optimizer_for_pretrained(
+            model=self.model, pretrained=self.model.transformer, lr=lr,
+            weight_decay=weight_decay, transformer_lr=transformer_lr
+        )
 
         scheduler = get_linear_schedule_with_warmup(
             optimizer, num_warmup_steps=warmup_steps, num_training_steps=num_training_steps
@@ -82,8 +65,9 @@ class SpanBIOParser(object):
             shuffle=shuffle
         )
 
-    def fit(self, train_path, dev_path, epoch=100, lr=1e-3, pretrained_model_name=None, batch_size=32,
-            warmup_steps=0.1):
+    def fit(self, train_path, dev_path, epoch=100, lr=1e-3, transformer_lr=1e-4,
+            pretrained_model_name=None, batch_size=32,
+            warmup_steps=0.1, ):
         set_seed(seed=123231)
 
         self.build_tokenizer(pretrained_model_name=pretrained_model_name)
@@ -105,7 +89,7 @@ class SpanBIOParser(object):
 
         optimizer, scheduler = self.build_optimizer(
             warmup_steps=warmup_steps, num_training_steps=len(train_dataloader) * epoch,
-            lr=lr
+            lr=lr, transformer_lr=transformer_lr
         )
         return self.fit_loop(train_dataloader, dev_dataloader, epoch=epoch, optimizer=optimizer,
                              scheduler=scheduler)
@@ -154,7 +138,7 @@ class SpanBIOParser(object):
     def fit_dataloader(self, train, optimizer, scheduler):
         self.model.train()
         total_loss = 0.
-        metric = Metric()
+        # metric = Metric()
         for batch in tqdm(train, desc='fit_dataloader'):
             pred = self.model(
                 input_ids=batch['input_ids'],
@@ -169,19 +153,19 @@ class SpanBIOParser(object):
             loss.backward()
 
             # for trues assert
-            trues = batch['srl_matrix'].flatten(end_dim=1)[mask.flatten(end_dim=1)[:, 0]]
-            assert trues.size(0) == sum([len(u) for u in batch['batch_tokens']])
-            # assert trues.bool().any(-1).all() # O as 0
+            # trues = batch['srl_matrix'].flatten(end_dim=1)[mask.flatten(end_dim=1)[:, 0]]
+            # assert trues.size(0) == sum([len(u) for u in batch['batch_tokens']])
+
             #
-            pred = self.model.decode(pred, mask)
+            # pred = self.model.decode(pred, mask)
             #
-            result1 = self.decode_output(pred, batch)
+            # result1 = self.decode_output(pred, batch)
             # result2 = self.decode_output2(pred, batch)
             # assert result1 == result2
-            metric.step(y_preds=result1, y_trues=batch['srl_sets'])
+            # metric.step(y_preds=result1, y_trues=batch['srl_sets'])
 
             self._step(optimizer=optimizer, scheduler=scheduler)
-        logger.info(f'train metric: {metric}')
+        # logger.info(f'train metric: {metric}')
         total_loss /= len(train)
         return total_loss
 
@@ -233,7 +217,7 @@ class SpanBIOParser(object):
             # for trues assert
             trues = batch['srl_matrix'].flatten(end_dim=1)[mask.flatten(end_dim=1)[:, 0]]
             assert trues.size(0) == sum([len(u) for u in batch['batch_tokens']])
-            # assert trues.bool().any(-1).all()
+
             #
             pred = self.model.decode(pred, mask)
             #
@@ -256,38 +240,44 @@ class SpanBIOParser(object):
             self.load_weights(save_path=model_path)
             self.loaded = True
 
-    # @torch.no_grad()
-    # def predict(self, samples: List[List[Tuple[str, str]]]):
-    #     self.model.eval()
-    #
-    #     preds = {'trees': [], 'probs': []}
-    #
-    #     words, tags = [], []
-    #     for sample in samples:
-    #         words.append([])
-    #         tags.append([0])
-    #         for word, tag in sample:
-    #             words[-1].append(word)
-    #             tags[-1].append(self.tags[tag])
-    #
-    #     words = encoder_texts(texts=words, tokenizer=self.tokenizer)
-    #     tags = pad_sequence([torch.tensor(tag, dtype=torch.long) for tag in tags], batch_first=True)
-    #     trees = [Tree.totree(i) for i in samples]
-    #
-    #     word_mask = words.ne(self.tokenizer.pad_token_id)[:, 1:]
-    #     mask = word_mask if len(words.shape) < 3 else word_mask.any(-1)
-    #     mask = (mask.unsqueeze(1) & mask.unsqueeze(2)).triu_(1)
-    #     lens = mask[:, 0].sum(-1)
-    #     s_span, s_label = self.model(words, tags)
-    #     # if self.args.mbr:
-    #     #     s_span = self.model.crf(s_span, mask, mbr=True)
-    #     chart_preds = self.model.decode(s_span, s_label, mask)
-    #     preds['trees'].extend([Tree.build(tree, [(i, j, self.id_labels[label]) for i, j, label in chart])
-    #                            for tree, chart in zip(trees, chart_preds)])
-    #
-    #     preds['probs'].extend([prob[:i - 1, 1:i].cpu() for i, prob in zip(lens, s_span)])
-    #
-    #     return preds
+    @torch.no_grad()
+    def predict(self, test):
+        self.model.eval()
+
+        results = []
+
+        for batch in tqdm(test, desc='predict_dataloader'):
+            pred = self.model(
+                input_ids=batch['input_ids'],
+                token_type_ids=batch['token_type_ids'],
+                attention_mask=batch['attention_mask'],
+                word_index=batch['word_index']
+            )
+            word_mask = batch['word_attention_mask']
+            mask = word_mask.unsqueeze(1) & word_mask.unsqueeze(2)
+
+            pred = self.model.decode(pred, mask)
+            prediction = self.decode_output(pred, batch)
+            batch_pred_result = [i for i in self.prediction_to_result(prediction, batch)]
+            # for picture
+            if len([_ for _ in DATA_PATH.joinpath('imgs').iterdir()]) <= 9:
+                render_graph(token=batch['batch_tokens'][0], srl_set=batch['srl_sets'][0], suffix='true')
+                render_graph(token=batch['batch_tokens'][0], srl_set=batch_pred_result[0], suffix='pred')
+            results.extend(batch_pred_result)
+        return results
+
+    def prediction_to_result(self, prediction: List, batch: Dict[str, Any], delimiter='') -> List:
+        for matrix, tokens in zip(prediction, batch['batch_tokens']):
+            # result = []
+            srls = []
+            for i, arguments in enumerate(matrix):
+                if arguments:
+                    # pas = [(delimiter.join(tokens[x[1]:x[2]]),) + x for x in arguments]
+                    # pas.insert(bisect([a[1] for a in arguments], i), (tokens[i], 'PRED', i, i + 1))
+                    # result.append(pas)
+                    srls.extend([(i, start, end, label) for (label, start, end) in arguments])
+
+            yield srls
 
     def _step(self, optimizer, scheduler):
         #

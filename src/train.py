@@ -8,6 +8,5 @@ m.fit(
     train_path=TRAIN_PATH,
     dev_path=DEV_PATH,
     pretrained_model_name='hfl/chinese-electra-180g-small-discriminator',
-    lr=1e-4,
     batch_size=32
 )

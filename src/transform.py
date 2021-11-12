@@ -59,7 +59,7 @@ def group_pa_by_p_(srl):
         if not bel:
             bel = grouped_srl[p] = set()
         bel.add((b, e, l))
-    return grouped_srl
+    return dict(sorted(grouped_srl.items(), key=lambda x: x[0]))
 
 
 class CoNLL2012SRLFile(object):
@@ -161,6 +161,10 @@ class CoNLL2012SRLDataSet(dataset.Dataset):
             pretrained_name_or_path,
             str) else pretrained_name_or_path
 
+        # self.lines = sorted(
+        #     [i for i in CoNLL2012SRLFile(file_path=path).load_file() if len(i['token']) < 100],
+        #     key=lambda x: len(x['token'])
+        # )
         self.lines = [i for i in CoNLL2012SRLFile(file_path=path).load_file() if len(i['token']) < 100]
         self.labels = CoNLL2012SRLFile(file_path=path).get_labels()
 

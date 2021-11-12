@@ -3,27 +3,27 @@
 import torch
 from torch import nn
 from torch.functional import F
-from transformers import AutoModel
 
 from src.layers.affine import Biaffine
 from src.layers.crf import CRF
 from src.layers.mlp import MLP
+from src.layers.transformer import TransformerEncoder
 
 
 class SpanBIOSemanticRoleLabelingModel(nn.Module):
     def __init__(self, model: str, n_out, n_mlp=300, dropout=0.1):
         super(SpanBIOSemanticRoleLabelingModel, self).__init__()
 
-        self.transformer = AutoModel.from_pretrained(model)
+        self.transformer = TransformerEncoder(pretrained_model_name_or_path=model)
         self.s_layer = MLP(
-            self.transformer.config.hidden_size,
+            self.transformer.n_out,
             n_mlp,
-            dropout=self.transformer.config.hidden_dropout_prob
+            dropout=self.transformer.dropout_prob
         )
         self.e_layer = MLP(
-            self.transformer.config.hidden_size,
+            self.transformer.n_out,
             n_mlp,
-            dropout=self.transformer.config.hidden_dropout_prob
+            dropout=self.transformer.dropout_prob
         )
         self.biaffine = Biaffine(n_in=n_mlp, n_out=n_out)
 
@@ -34,7 +34,7 @@ class SpanBIOSemanticRoleLabelingModel(nn.Module):
             input_ids=input_ids,
             token_type_ids=token_type_ids,
             attention_mask=attention_mask
-        )[0]
+        )
         word_out = torch.gather(
             seq_out[:, 1:, :], dim=1, index=word_index.unsqueeze(-1).expand(-1, -1, seq_out.size(-1))
         )
