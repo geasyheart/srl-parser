@@ -261,8 +261,8 @@ class SpanBIOParser(object):
             batch_pred_result = [i for i in self.prediction_to_result(prediction, batch)]
             # for picture
             if len([_ for _ in DATA_PATH.joinpath('imgs').iterdir()]) <= 9:
-                render_graph(token=batch['batch_tokens'][0], srl_set=batch['srl_sets'][0], suffix='true')
-                render_graph(token=batch['batch_tokens'][0], srl_set=batch_pred_result[0], suffix='pred')
+                render_graph(tokens=batch['batch_tokens'][0], srl_set=batch['srl_sets'][0], suffix='true')
+                render_graph(tokens=batch['batch_tokens'][0], srl_set=batch_pred_result[0], suffix='pred')
             results.extend(batch_pred_result)
         return results
 

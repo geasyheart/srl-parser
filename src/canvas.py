@@ -1,32 +1,39 @@
 # -*- coding: utf8 -*-
 #
 import uuid
-from typing import List, Set, Tuple
 
 from graphviz import Digraph
 
 from src.config import DATA_PATH
+from src.transform import group_pa_by_p_
 
 
-def render_graph(token: List[str], srl_set: Set[Tuple[int, int, int, str]], suffix=''):
+def render_graph(tokens, srl_set, pos=None, suffix=''):
     g = Digraph(format='png')
+    # 分词
+    for index, token in enumerate(tokens):
+        if pos:
+            node = f'{token}/{pos[index]}'
+        else:
+            node = token
+        g.node(name=f'node-{index}', label=node)
 
-    for (cur_token, start, end, label) in srl_set:
-        sg = Digraph()
-        sg.attr(rank='same')
-        from_id = str(uuid.uuid4())
-        to_id = str(uuid.uuid4())
-        sg.node(name=from_id, label=token[cur_token])
-        sg.node(name=to_id, label="".join(token[start:end]))
+    group_srls = group_pa_by_p_(srl_set)
+    for token_index, srls in group_srls.items():
+        # add new level description
 
-        sg.edge(from_id, to_id, label=label)
+        g.node(name=f'label-{token_index}', label=f'谓词:\n{tokens[token_index]}', style='filled', color='lightblue2')
+        g.edge(f'node-{token_index}', f'label-{token_index}', style="invis")
 
-        g.subgraph(sg)
+        for start, end, label in srls:
+            uni_id = str(uuid.uuid4())
+            g.node(name=uni_id, label="".join(tokens[start:end]))
+            g.edge(f'label-{token_index}', uni_id, label=label)
 
     save_dir = DATA_PATH.joinpath('imgs')
     if not save_dir.exists():
         save_dir.mkdir()
-    g.view(filename=f'{"".join(token)[:10]}.{suffix}.gv', directory=save_dir)
+    g.view(filename=f'{"".join(tokens)[:10]}.{suffix}.gv', directory=save_dir)
 
 
 if __name__ == '__main__':
@@ -46,4 +53,5 @@ if __name__ == '__main__':
                 ['O', 'O', 'O', 'O', 'O', 'O', 'O', 'O', 'O', 'O', 'O', 'O']],
         'srl_set': {(1, 0, 1, 'ARG0'), (3, 5, 11, 'ARG2'), (5, 6, 11, 'ARG1'), (3, 4, 5, 'ARG1')},
         'pos': ['PN', 'VA', 'PU', 'VV', 'PN', 'VV', 'NN', 'NN', 'DEG', 'NT', 'NN', 'PU']}
-    render_graph(line['token'], line['srl_set'])
+
+    render_graph(line['token'], line['srl_set'], pos=line['pos'])
