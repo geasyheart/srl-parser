@@ -196,7 +196,7 @@ class CoNLL2012SRLDataSet(dataset.Dataset):
             w = srl.size(0)
             srl_matrix[index][:w, :w] = srl
         token_result = tokenize(batch_tokens, tokenizer=self.tokenizer, max_length=512)
-        assert all(token_result['overflow']) is False  # 如果这里报错就改self.lines那里
+        assert any(token_result['overflow']) is False  # 如果这里报错就改self.lines那里
         input_ids = pad_sequence([torch.tensor(input_ids) for input_ids in token_result['input_ids']], batch_first=True)
         token_type_ids = pad_sequence(
             [torch.tensor(token_type_ids) for token_type_ids in token_result['token_type_ids']],
